@@ -19,129 +19,431 @@
 #'    code_folding: show
 #' ---
 #'
+
+# Chunk Options & Environment Setup ----
+# Configure knitr chunk options and load required libraries for data import,
+# string/date manipulation, and matrix reshaping.
 #+ init, echo=FALSE, message=FALSE, warning=FALSE
 # init ----
 # This part does not show up in your rendered report, only in the script,
 # because we are using regular comments instead of #' comments
-debug <- 0;
-knitr::opts_chunk$set(echo=debug>-1, warning=debug>0, message=debug>0, class.output="scroll-20", attr.output='style="max-height: 150px; overflow-y: auto;"');
+debug <- 0
 
-library(rio);# simple command for importing and exporting
-library(pander); # format tables
+knitr::opts_chunk$set(
+  echo = debug > -1,
+  warning = debug > 0,
+  message = debug > 0,
+  class.output = "scroll-20",
+  attr.output = 'style="max-height: 150px; overflow-y: auto;"'
+)
+
+
+library(rio)
+# simple command for importing and exporting
+library(pander)
+# format tables
 #library(printr); # set limit on number of lines printed
-library(dplyr); #add dplyr library
+library(dplyr)
+#add dplyr library
 library(lubridate)#date manipulation
 library(stringr) #string manipulation
 library(tidyr) #pivot_wider function
 library(purrr)
-options(max.print=500);
-panderOptions('table.split.table',Inf); panderOptions('table.split.cells',Inf);
+options(max.print = 500)
+
+panderOptions('table.split.table', Inf)
+panderOptions('table.split.cells', Inf)
+
+
+
+# Data Ingestion ----
+# Bulk-import all CSV files from the target directory into a named list of data frames.
 datalocation <- "~/Downloads/archive/"
-list.files(datalocation,full.names = T)
-#TEST <- import("C:/Users/nahid/OneDrive/Desktop/class/careplans.csv")
-dat <- sapply(list.files(datalocation, full.names = TRUE), import,simplify = FALSE) %>% 
-  setNames(.,basename(names(.)))
-# data ingestion ----
+list.files(datalocation, full.names = TRUE)
+
 
 # Your two data frames
+dat <- sapply(list.files(datalocation, full.names = TRUE), import, simplify = FALSE) %>%
+  setNames(., basename(names(.)))
 
 
-
-
-# First, subset to acute/viral conditions
-
+# Subset & Age Calculation ----
+# Filter medical records for acute/viral conditions and calculate patient age at the time of encounter.
 acute_viral <- dat$conditions.csv %>%
   
   filter(grepl("acute|viral", DESCRIPTION, ignore.case = TRUE))
 
 
 
-# data ingestion ----
 # Match patients and calculate age at encounter
 
 acute_viral_age <- acute_viral %>%
   
-  left_join(
-    dat$patients.csv %>% select(Id, BIRTHDATE),
-    by = c("PATIENT" = "Id")
-  ) %>%
+  left_join(dat$patients.csv %>% select(Id, BIRTHDATE),
+            by = c("PATIENT" = "Id")) %>%
   
   mutate(
-    
     START = as.Date(START),
     
     BIRTHDATE = as.Date(BIRTHDATE),
-    
-    age_at_encounter = time_length(
-      
-      interval(BIRTHDATE, START),unit = "years"))
-
-  
-      # Acute Viral Pharyngitis ----
-temp <- filter(dat$conditions.csv,DESCRIPTION=="Acute viral pharyngitis (disorder)") %>% 
-  mutate(month=floor_date(START, unit = "month")) %>% 
-  group_by(month) %>%  summarise(count=n())   
-
-lm(count~month,temp)
-
-# topconditions----
-conditionslope <-  mutate(dat$conditions.csv,month=floor_date(START, unit = "month")) %>% 
-  group_by(month,CODE,DESCRIPTION) %>%  summarise(count=n())   %>% 
-  group_by(CODE,DESCRIPTION) %>% filter(year(month)>=2023 & length(unique(month))>10) %>% 
-  summarise(events=lm(count~month)$coefficients[2]) %>% arrange(desc(events)) 
- 
-plot(conditionslope$events,type="l")                                                                 
-abline(v=25,col="green")
-#25 seems like a reasonable cutoff for the conditions
-topconditionslope<- head(conditionslope,25)$CODE #to pull out column from data frame square brackets, to pull from vector put comma before
+    age_at_encounter = time_length(interval(BIRTHDATE, START), unit = "years")
+  )
 
 
-# code/name mapping
-codemap<- dat$conditions.csv [c("CODE","DESCRIPTION")]%>%unique()%>% {setNames(.$DESCRIPTION,.$CODE)} 
+# Acute Viral Pharyngitis Time-Series Trend----
+#  Aggregate monthly occurrences of pharyngitis to run a baseline linear trend model.
+temp <- filter(dat$conditions.csv,
+               DESCRIPTION == "Acute viral pharyngitis (disorder)") %>%
+  mutate(month = floor_date(START, unit = "month")) %>%
+  group_by(month) %>%  summarise(count = n())
 
-codemap <- dat$conditions.csv[c("CODE","DESCRIPTION")] %>% unique() %>%  # Removes all the duplicate rows 
-  with(setNames(DESCRIPTION,CODE)) # no longer a dataframe, now a vector with names # curly brackets protect the period
-  
 
-#code co occurance----
-#pa
-paitentcodes <- filter(dat$conditions.csv,CODE %in% topconditionslope)%>% #%in% filters for a value within a vector, unique keeps all different rows,
-  distinct(PATIENT, CODE) %>% 
-  mutate(present=1) %>% 
-  pivot_wider(names_from = CODE, values_from= present, values_fill = 0 )#piviot wider chnages the code entrys to the title and lets you know if the code is present in a patient sidenote: Change n/a to zero because you going to do math
-encountercodes <- filter(dat$conditions.csv,CODE %in% topconditionslope)%>% #%in% filters for a value within a vector, unique keeps all different rows,
-  distinct(ENCOUNTER, CODE) %>% 
-  mutate(present=1) %>% pivot_wider(names_from = CODE, values_from= present, values_fill = 0 )
-#see unique patient ids
-npatients <- nrow(dat$patients.csv) #specifc to getting number of patients
+
+# Top Conditions Trend Analysis ----
+# Identify conditions with the highest positive growth slope post-2023 and isolate the top 25 conditions.
+conditionslope <- mutate(dat$conditions.csv, month = floor_date(START, unit = "month")) %>%
+  group_by(month, CODE, DESCRIPTION) %>%
+  summarise(count = n()) %>%
+  group_by(CODE, DESCRIPTION) %>%
+  filter(year(month) >= 2023 & length(unique(month)) > 10) %>%
+  summarise(events = lm(count ~ month)$coefficients[2]) %>%
+  arrange(desc(events))
+
+plot(conditionslope$events, type = "l")
+abline(v = 25, col = "green")
+
+topconditionslope <- head(conditionslope, 25)$CODE
+
+
+# Code Mapping & Vector Lookups ----
+# Create a key-value lookup vector mapping condition codes to readable descriptions.
+codemap <- dat$conditions.csv[c("CODE", "DESCRIPTION")] %>%
+  unique() %>%
+  with(setNames(DESCRIPTION, CODE))
+
+
+# Matrix Preparation for Co-Occurrence ----
+# Reshape patient and encounter data into binary presence/absence matrices for the top conditions.
+paitentcodes <- filter(dat$conditions.csv, CODE %in% topconditionslope) %>%
+  distinct(PATIENT, CODE) %>%
+  mutate(present = 1) %>%
+  pivot_wider(names_from = CODE,
+              values_from = present,
+              values_fill = 0)
+
+encountercodes <- filter(dat$conditions.csv, CODE %in% topconditionslope) %>%
+  distinct(ENCOUNTER, CODE) %>%
+  mutate(present = 1) %>%
+  pivot_wider(names_from = CODE,
+              values_from = present,
+              values_fill = 0)
+
+npatients <- nrow(dat$patients.csv)
 nencounters <- nrow(dat$encounters.csv)
-codecombos <- combn(topconditionslope,2,simplify = FALSE) #2 gives you combinations of pairs, then FALSE gives you all those possible combinations of the pairs
+codecombos <- combn(topconditionslope, 2, simplify = FALSE) #2 gives you combinations of pairs, then FALSE gives you all those possible combinations of the pairs
 
-fn_lift <- function(xx,codesource=paitentcodes,denom=npatients){ #creates a custom in R,ac
+
+# Lift Metric & Co-Occurrence Analysis ----
+# Define helper function to compute statistical lift between condition pairs, then visualize co-occurrence via heatmaps.
+codecombos <- combn(topconditionslope, 2, simplify = FALSE)
+
+fn_lift <- function(xx,
+                    codesource = paitentcodes,
+                    denom = npatients) {
   counta <- sum(codesource[[xx[1]]])
   countb <- sum(codesource[[xx[2]]])
-  expected <- counta*countb/denom
-  observed <- sum(codesource[[ xx[1]]]*codesource[[ xx[2]]])
-  out <- if(expected == 0){1} else{observed/expected} 
-  data.frame(cnd_a=xx[],cnd_b=rev(xx[]),lift=out) #
+  expected <- counta * countb / denom
+  observed <- sum(codesource[[xx[1]]] * codesource[[xx[2]]])
+  out <- if (expected == 0) {
+    1
+  } else {
+    observed / expected
+  }
+  data.frame(cnd_a = xx[],
+             cnd_b = rev(xx[]),
+             lift = out)
 }
-paitentliftmatrix <- map(codecombos,fn_lift) %>% list_rbind() %>% 
-   mutate(cnd_a=codemap[cnd_a],cnd_b=codemap[cnd_b]) %>% 
-  xtabs(lift~cnd_a+cnd_b,data=.)
-heatmap(log1p(paitentliftmatrix),symm = T,scale = "none",col=hcl.colors(50, "RdBu", rev=TRUE))
+paitentliftmatrix <- map(codecombos, fn_lift) %>% list_rbind() %>%
+  mutate(cnd_a = codemap[cnd_a], cnd_b = codemap[cnd_b]) %>%
+  xtabs(lift ~ cnd_a + cnd_b, data = .)
+heatmap(
+  log1p(paitentliftmatrix),
+  symm = T,
+  scale = "none",
+  col = hcl.colors(50, "RdBu", rev = TRUE)
+)
+
+# Patient-level co-occurrence heatmap
+paitentliftmatrix <- map(codecombos, fn_lift) %>%
+  list_rbind() %>%
+  mutate(cnd_a = codemap[cnd_a], cnd_b = codemap[cnd_b]) %>%
+  xtabs(lift ~ cnd_a + cnd_b, data = .)
+
+heatmap(
+  log1p(paitentliftmatrix),
+  symm = TRUE,
+  scale = "none",
+  col = hcl.colors(50, "RdBu", rev = TRUE)
+)
+
+# Encounter-level co-occurrence heatmap
+encounterliftmatrix <- map(codecombos, fn_lift, codesource = encountercodes, denom = nencounters) %>%
+  list_rbind() %>%
+  mutate(cnd_a = codemap[cnd_a], cnd_b = codemap[cnd_b]) %>%
+  xtabs(lift ~ cnd_a + cnd_b, data = .)
+
+e_heat <- heatmap(
+  log1p(encounterliftmatrix),
+  symm = TRUE,
+  scale = "none",
+  col = hcl.colors(50, "RdBu", rev = TRUE)
+)
+systemic_conditions <- colnames(encounterliftmatrix)[e_heat$colInd][18:25]
+local_conditions <- colnames(encounterliftmatrix)[e_heat$colInd][-(3:5)] %>% setdiff(systemic_conditions)
 
 
 
-encounterliftmatrix <- map(codecombos,fn_lift,codesource=encountercodes,denom=nencounters) %>% list_rbind() %>% 
-  mutate(cnd_a=codemap[cnd_a],cnd_b=codemap[cnd_b]) %>% 
-  xtabs(lift~cnd_a+cnd_b,data=.)
-e_heat <- heatmap(log1p(encounterliftmatrix),symm = T,scale = "none",col=hcl.colors(50, "RdBu", rev=TRUE))
-colnames(encounterliftmatrix)[e_heat$colInd]
+#Summarizing conditions by encounter -----
+conditions_by_encounter <- group_by(dat$conditions.csv, ENCOUNTER, PATIENT) %>%
+  summarize(
+    local = length(intersect(local_conditions, DESCRIPTION))
+    ,
+    systemic = length(intersect(systemic_conditions, DESCRIPTION))
+    ,
+    first_condition_start = min(START, na.rm = TRUE)
+    ,
+    last_condition_start = max(START, na.rm = TRUE)
+    ,
+    conditon_type = case_when(
+      local > 0 &
+        systemic > 0 ~ "both",
+      #When encounter meet both conditions
+      local > 0 ~ "local",
+      #when encounter only has local conditons
+      systemic > 0 ~ "systemic",
+      #when encounter only has systemic conditions
+      TRUE ~ "neither"
+    )
+  ) #When encounter meets neither condition
+#Most encounters have more than one condition, at least 4
+subset(conditions_by_encounter, systemic > 0)$systemic %>% hist()
 
-rownames(paitentliftmatrix)
-codemap[colnames(paitentliftmatrix)]
+#Most encounters have 1 local condition, none have more than 3
+subset(conditions_by_encounter, local > 0)$local %>% hist()
+
+sum(conditions_by_encounter$systemic > 0)#Number of encounters with systemic conditions
+sum(conditions_by_encounter$local > 0) #Number of encounters with local conditions
+sum((conditions_by_encounter$systemic > 0) * (conditions_by_encounter$local >
+                                                0)) #Number of both systemic and local conditions
+
+#Numeric plot of the histogram created for local conditions
+with(conditions_by_encounter, table(local))
+#Numeric plot of the histogram created for systemic conditions
+with(conditions_by_encounter, table(systemic))
+#Contingency table of both local and systemic encounters
+with(conditions_by_encounter, table(local, systemic))
+
+#Counts of different types of encounters
+conditions_by_encounter$conditon_type %>% table %>% prop.table() #prop.table changes from raw data to percentage
+subset(
+  conditions_by_encounter,
+  first_condition_start != last_condition_start &
+    conditon_type != 'neither'
+) #!= shows inequality  #Make sure we can use first conditions start for it to show when the encounter took place
+
+#Creating Conditons by Patient
+conditions_by_patient <- group_by(conditions_by_encounter, PATIENT) %>%
+  summarise(
+    nlocal = sum(local > 0)
+    ,
+    nsystemic = sum(systemic > 0)
+    ,
+    date_systemic = if (nsystemic > 0) {
+      min(first_condition_start[systemic > 0])
+    } else {
+      NA
+    }
+    %>% as.Date(),
+    #date of the first systemic condition first
+    date_local = if (nlocal > 0) {
+      min(first_condition_start[local > 0])
+    } else {
+      NA
+    }
+    %>% as.Date(),
+    #date of first local condition first
+    condition_order = case_when(
+      nlocal > 0 & nsystemic == 0 ~ "local only",
+      nsystemic > 0 & nlocal == 0 ~ "systemic only",
+      nlocal > 0 &
+        nsystemic > 0 & date_local < date_systemic ~ "local first",
+      nlocal > 0 &
+        nsystemic > 0 &
+        date_systemic < date_local ~ "systemic first",
+      nlocal > 0 &
+        nsystemic > 0 & date_local == date_systemic ~ "same date",
+      TRUE ~ "neither"
+    ),
+    
+    interval =  as.numeric(difftime(date_systemic, date_local, units = "days"))   #debug = {if(n_local+n_systemic > 0){browser()
+    #Adding patient demographics to the condition summary
+  ) %>% left_join(dat$patients.csv, by = c("PATIENT" = "Id"))
+
+#Creating histogram for each patient----
+subset(conditions_by_patient, nlocal > 0)$nlocal %>%
+  hist(
+    main = "Local Encounters per Patient",
+    xlab = "Number of local encounters",
+    ylab = "Number of patients",
+    col = "lightgreen"
+  )
+#head(conditions_by_patient) in the console allows you to view first six patients
+#names(conditions_by_patient) in the console allows you to see all available columns
+
+# History of disease spread -----------------------------------------------
+hist(conditions_by_patient$date_local, breaks = 100)
+
+#Getting first date for local and systemic encounters
+min(conditions_by_patient$date_local, na.rm = TRUE)
+min(conditions_by_patient$date_systemic, na.rm = TRUE)
+
+summarise(
+  conditions_by_patient,
+  datelocal = min(date_local, na.rm = TRUE)
+  ,
+  datesystemic = min(date_systemic, na.rm = TRUE)
+)
+
+#Grouping when the first patient encounter happened by State
+group_by(conditions_by_patient, STATE) %>% summarise(
+  datelocal = min(date_local, na.rm = TRUE)
+  ,
+  datesystemic = min(date_systemic, na.rm = TRUE)
+) %>% arrange(datelocal, datesystemic)
+
+#Getting more specific, first patient encounter within Texas by city
+subset(conditions_by_patient, STATE == "Texas" &
+         !is.na(date_local)) %>% group_by(CITY) %>% summarise(
+           datelocal = min(date_local, na.rm = TRUE)
+           ,
+           datesystemic = min(date_systemic, na.rm = TRUE)
+         ) %>% arrange(datelocal, datesystemic)
+
+#Getting encounters
+localencounters <- subset(conditions_by_encounter, local > 0)$ENCOUNTER
+systemicencounters <- subset(conditions_by_encounter, systemic > 0)$ENCOUNTER
+
+#Getting patient
+localpatients <- subset(conditions_by_encounter, local > 0)$PATIENT %>% unique()
+systemicpatients <- subset(conditions_by_encounter, systemic > 0)$PATIENT %>%
+  unique()
+
+#Procedures.csv ----
+subset(dat$procedures.csv, ENCOUNTER %in% localencounters)$DESCRIPTION %>% table %>% sort
+subset(dat$procedures.csv, ENCOUNTER %in% systemicencounters)$DESCRIPTION %>% table %>% sort
+
+#Observations.csv
+subset(dat$observations.csv, ENCOUNTER %in% localencounters)$DESCRIPTION %>% table %>% sort
+subset(dat$observations.csv, ENCOUNTER %in% systemicencounters)$DESCRIPTION %>% table %>% sort
+
+#Number of records within each encounter for local and systemic conditions
+subset(dat$observations.csv, ENCOUNTER %in% localencounters) %>% nrow()
 
 
-fn_lift(codecombos[[12]])
-#we are assigning a function and naming it with fn, curly brakctes bundle a bunch of code and allow you to use it in a function, brackets pull something from a dataframe
-Map() #Map takes a list and has it perform a function, actual count divided by the expected count
+# Summarize a selected dataset to compare its overall records with records linked to local and systemic encounters. Count both rows and unique
+# for each group. This helps show how much information is recorded
+# per encounter and how that differs between the groups.
+fn_rows_encounters <- function(xx)
+{
+  summarise(
+    dat[[xx]],
+    source = xx,
+    rows = n(),
+    rows_local = sum(ENCOUNTER %in% localencounters, na.rm = TRUE),
+    rows_systemic = sum(ENCOUNTER %in% systemicencounters, na.rm = TRUE),
+    encounters = length(unique(ENCOUNTER)),
+    encounters_local = length(intersect(ENCOUNTER, localencounters)),
+    encounters_systemic = length(intersect(ENCOUNTER, systemicencounters)),
+    rows_per_encounter = rows / encounters,
+    local_rows_per_encounter = rows_local / encounters_local,
+    systemic_rows_per_encounter = rows_systemic / encounters_systemic
+  )
+}
+
+#Counts of conditions types by patient phenotype by all datasets in dat
+fn_rows("observations.csv")
+names(dat) %>% setdiff(c("patients.csv", "encounters.csv")) %>% sapply(fn_rows, simplify = FALSE) %>% bind_rows()
+
+fn_rows_patients <- function(xx)
+{
+  summarise(
+    dat[[xx]],
+    source = xx,
+    rows = n(),
+    rows_local = sum(PATIENT %in% localpatients, na.rm = TRUE),
+    rows_systemic = sum(PATIENT %in% systemicpatients, na.rm = TRUE),
+    patients = length(unique(PATIENT)),
+    patients_local = length(intersect(PATIENT, localpatients)),
+    patients_systemic = length(intersect(PATIENT, systemicpatients)),
+    rows_per_patients = rows / patients,
+    local_rows_per_patients = rows_local / patients_local,
+    systemic_rows_per_patients = rows_systemic / patients_systemic
+  )
+}
+
+#Counts of conditions types by patient phenotype by all datasets in dat
+fn_rows_patients("observations.csv")
+names(dat) %>% setdiff(c("patients.csv", "encounters.csv")) %>%
+  sapply(fn_rows_patients, simplify = FALSE) %>% bind_rows()
+
+
+# Extract medications for each patient and encounter, excluding missing medication codes.
+transmute(dat$medications.csv,
+          PATIENT,
+          ENCOUNTER,
+          CODE,
+          DESCRIPTION,
+          source = "medications") %>% filter(!is.na(CODE))
+# Extract prescription reasons for each patient and encounter, excluding missing reason codes.
+transmute(
+  dat$medications.csv,
+  PATIENT,
+  ENCOUNTER,
+  CODE = REASONCODE,
+  DESCRIPTION = REASONDESCRIPTION,
+  source = "medications_reason"
+) %>% filter(!is.na(CODE))
+
+
+fn_standardize <- function(xx) {
+  if ("SSN" %in% names(xx)){return(NULL)}
+  if ("Id" %in% names(xx) & !"ENCOUNTER" %in% names(xx)) {xx <- mutate(xx,ENCOUNTER=Id)}
+   out <- transmute(xx,
+                   PATIENT,
+                   ENCOUNTER,
+                   CODE,
+                   DESCRIPTION,
+                   subtype = "CODE") %>% filter(!is.na(CODE))
+  if (length(intersect(colnames(xx), c("REASONCODE", "REASONDESCRIPTION"))) ==
+      2) {
+  }
+  #alternative if(all(c("REASONCODE","REASONDESCRIPTION") %in% names(xx))
+  out <- bind_rows(
+    out,
+    transmute(
+      xx,
+      PATIENT,
+      ENCOUNTER,
+      CODE = as.character(CODE),
+      DESCRIPTION = as.character(REASONDESCRIPTION),
+      subtye = "reason"
+    ) %>% filter(!is.na(CODE))
+  )
+  #browser()
+  return(out)
+}
+
+#test fn_standardize
+fact_table <- saaply(dat, fn_standardize, simplify= FALSE) %>% bind_rows(.id= "type")
+
+
