@@ -371,8 +371,8 @@ fn_rows_encounters <- function(xx)
 }
 
 #Counts of conditions types by patient phenotype by all datasets in dat
-fn_rows("observations.csv")
-names(dat) %>% setdiff(c("patients.csv", "encounters.csv")) %>% sapply(fn_rows, simplify = FALSE) %>% bind_rows()
+fn_rows_encounters("observations.csv")
+names(dat) %>% setdiff(c("patients.csv", "encounters.csv")) %>% sapply(fn_rows_encounters, simplify = FALSE) %>% bind_rows()
 
 fn_rows_patients <- function(xx)
 {
@@ -418,32 +418,51 @@ transmute(
 fn_standardize <- function(xx) {
   if ("SSN" %in% names(xx)){return(NULL)}
   if ("Id" %in% names(xx) & !"ENCOUNTER" %in% names(xx)) {xx <- mutate(xx,ENCOUNTER=Id)}
-   out <- transmute(xx,
+  out <- transmute(xx,
                    PATIENT,
                    ENCOUNTER,
-                   CODE,
+                   CODE= as.character(CODE),
                    DESCRIPTION,
                    subtype = "CODE") %>% filter(!is.na(CODE))
   if (length(intersect(colnames(xx), c("REASONCODE", "REASONDESCRIPTION"))) ==
       2) {
-  }
-  #alternative if(all(c("REASONCODE","REASONDESCRIPTION") %in% names(xx))
-  out <- bind_rows(
-    out,
-    transmute(
-      xx,
-      PATIENT,
-      ENCOUNTER,
-      CODE = as.character(CODE),
-      DESCRIPTION = as.character(REASONDESCRIPTION),
-      subtye = "reason"
-    ) %>% filter(!is.na(CODE))
-  )
+    #alternative if(all(c("REASONCODE","REASONDESCRIPTION") %in% names(xx))
+    out <- bind_rows(
+      out,
+      transmute(
+        xx,
+        PATIENT,
+        ENCOUNTER,
+        CODE = as.character(REASONCODE),
+        DESCRIPTION = as.character(REASONDESCRIPTION),
+        subtype = "reason"
+      ) %>% filter(!is.na(CODE))
+    )}
   #browser()
   return(out)
 }
 
-#test fn_standardize
-fact_table <- saaply(dat, fn_standardize, simplify= FALSE) %>% bind_rows(.id= "type")
+#Create a fact table of standardized codes and descriptions
+fact_table <- sapply(dat, fn_standardize, simplify= FALSE) %>% bind_rows(.id= "type")
+
+#Determine the number of encounters with a specified code
+summarise(fact_table, encounter_no = length(unique(ENCOUNTER)),
+  encounter_w_code =length(unique(ENCOUNTER[CODE == 24199005])),
+  systemic=length(systemicencounters),
+  systemic_w_code= length(intersect(ENCOUNTER[CODE=="24199005"],systemicencounters)))
+  
+#Create a function to determine number of encounters for each code (medication, allergy, care plan, etc.)
+fn_encounter_codes <- function(xx){
+  encounter_w_code <- length(unique(fact_table$ENCOUNTER[fact_table$CODE == xx]))
+  systemic_w_code <- length(intersect(fact_table$ENCOUNTER[fact_table$CODE==xx], systemicencounters))
+  out <- c(systemic_w_code = systemic_w_code, encounter_w_code= encounter_w_code)
+  return(out)
+  }
+
+#test if fn_encounter_code works on a test code (agitation)
+fn_encounter_codes("24199005")
+
+# Apply fn_encounter_codes to all unique codes from fact_table
+encounter_code_tallies <- sapply(unique(fact_table$CODE),fn_encounter_codes, simplify=FALSE) %>% bind_rows %>% View()
 
 
