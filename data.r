@@ -465,4 +465,104 @@ fn_encounter_codes("24199005")
 # Apply fn_encounter_codes to all unique codes from fact_table
 encounter_code_tallies <- sapply(unique(fact_table$CODE),fn_encounter_codes, simplify=FALSE) %>% bind_rows %>% View()
 
+#Assignment: find additional columns in one of the df in dat, not captured in fn_standardize
+#Examining the first recorded allergy reaction for each patiient and encounter
+dat$allergies.csv %>% 
+  select(PATIENT, ENCOUNTER, REACTION1, DESCRIPTION1, SEVERITY1)%>%
+  filter(!is.na(REACTION1)) %>% 
+  head()
+#Examining the second recorded allergy 
+dat$allergies.csv %>% 
+  select(PATIENT, ENCOUNTER, REACTION2, DESCRIPTION2, SEVERITY2)%>%
+  filter(!is.na(REACTION2)) %>% 
+  head()
+# Count how many allergy records have a first and second reaction code
+dat$allergies.csv %>%
+  summarise(
+    first_reaction = sum(!is.na(REACTION1)),
+    second_reaction = sum(!is.na(REACTION2))
+  )
+# Standardize codes and descriptions from each data frame
+fn_standardize <- function(xx) {
+  
+  # Skip the patient demographic data frame
+  if ("SSN" %in% names(xx)) {
+    return(NULL)
+  }
+  
+  # Use Id as the encounter identifier when ENCOUNTER is not present
+  if ("Id" %in% names(xx) & !"ENCOUNTER" %in% names(xx)) {
+    xx <- mutate(xx, ENCOUNTER = Id)
+  }
+  
+  # Collect the main code and description from the data frame
+  out <- transmute(
+    xx,
+    PATIENT,
+    ENCOUNTER,
+    CODE = as.character(CODE),
+    DESCRIPTION,
+    subtype = "CODE"
+  ) %>%
+    filter(!is.na(CODE))
+  
+  # Add reason codes and descriptions when those columns exist
+  if (all(c("REASONCODE", "REASONDESCRIPTION") %in% names(xx))) {
+    out <- bind_rows(
+      out,
+      transmute(
+        xx,
+        PATIENT,
+        ENCOUNTER,
+        CODE = as.character(REASONCODE),
+        DESCRIPTION = as.character(REASONDESCRIPTION),
+        subtype = "reason"
+      ) %>%
+        filter(!is.na(CODE))
+    )
+  }
+  
+# Testing function on allergies -----
+  # Add the first allergy reaction when those columns exist
+  if (all(c("REACTION1", "DESCRIPTION1") %in% names(xx))) {
+    out <- bind_rows(
+      out,
+      transmute(
+        xx,
+        PATIENT,
+        ENCOUNTER,
+        CODE = as.character(REACTION1),
+        DESCRIPTION = as.character(DESCRIPTION1),
+        subtype = "allergy_reaction_1"
+      ) %>%
+        filter(!is.na(CODE))
+    )
+  }
+  
+  # Add the second allergy reaction when those columns exist
+  if (all(c("REACTION2", "DESCRIPTION2") %in% names(xx))) {
+    out <- bind_rows(
+      out,
+      transmute(
+        xx,
+        PATIENT,
+        ENCOUNTER,
+        CODE = as.character(REACTION2),
+        DESCRIPTION = as.character(DESCRIPTION2),
+        subtype = "allergy_reaction_2"
+      ) %>%
+        filter(!is.na(CODE))
+    )
+  }
+  
+  # Return all the standardized rows collected above
+  return(out)
+}
+# Test the function on allergies only
+allergy_test <- fn_standardize(dat$allergies.csv)
 
+# Count the rows produced for each type of information
+table(allergy_test$subtype)
+# Apply the updated function to all data frames and combine the results
+fact_table <- sapply(dat, fn_standardize, simplify = FALSE) %>%
+  bind_rows(.id = "type")
