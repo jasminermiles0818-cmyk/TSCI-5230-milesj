@@ -443,7 +443,7 @@ fn_standardize <- function(xx) {
 }
 
 #Create a fact table of standardized codes and descriptions
-fact_table <- sapply(dat, fn_standardize, simplify= FALSE) %>% bind_rows(.id= "type")
+fact_table <- sapply(dat, fn_standardize, simplify= FALSE) %>% bind_rows(.id= "type") %>% filter(ENCOUNTER %in% dat$encounters.csv$Id)
 
 #Determine the number of encounters with a specified code
 summarise(fact_table, encounter_no = length(unique(ENCOUNTER)),
@@ -566,3 +566,54 @@ table(allergy_test$subtype)
 # Apply the updated function to all data frames and combine the results
 fact_table <- sapply(dat, fn_standardize, simplify = FALSE) %>%
   bind_rows(.id = "type")
+
+#Group records by code and description
+#overall and within the systemic and local encounter lists, remove grouping after calc.
+#Add total number of encounters for comparsion 
+encounter_code_tallies_2 <- fact_table %>%
+  group_by(CODE, DESCRIPTION, type) %>%
+  summarise(encounter_w_code = n_distinct(ENCOUNTER),
+            systemic_w_code = sum(unique(ENCOUNTER) %in% systemicencounters),
+            local_w_code = sum(unique(ENCOUNTER) %in% localencounters)
+  ) %>% 
+  mutate(total_encounters=nrow(dat$encounters.csv),
+         total_systemic_encounters = length(systemicencounters),
+         total_local_encounters = length(localencounters),
+         fraction_total_w_code= encounter_w_code/total_encounters,
+         fraction_systemic_w_code= systemic_w_code/total_systemic_encounters,
+         fraction_local_w_code= local_w_code/total_local_encounters,
+         local_no_code = total_local_encounters - local_w_code,
+         nonlocal_w_code = encounter_w_code - local_w_code,
+         nonlocal_no_code = total_encounters - encounter_w_code - total_local_encounters + local_w_code,
+         #Haldane corrections
+         haldane_local_w_code = local_w_code + 0.5,
+         haldane_local_no_code = local_no_code + 0.5,
+         haldane_nonlocal_w_code = nonlocal_w_code + 0.5,
+         haldane_nonlocal_no_code = nonlocal_no_code + 0.5,
+         #Proportions
+         local_code_prevalence= haldane_local_w_code/(haldane_local_w_code+haldane_local_no_code),
+         nonlocal_code_absence=  haldane_nonlocal_no_code/(haldane_nonlocal_w_code+haldane_nonlocal_no_code),
+         local_likelihood_ratio= local_code_prevalence/(1-nonlocal_code_absence),
+         local_OR= haldane_local_w_code*haldane_nonlocal_no_code/(haldane_local_no_code*haldane_nonlocal_w_code)
+         ) %>% arrange(desc(local_likelihood_ratio)
+         )
+         
+
+# |           | Has Code                                          | No Code                                                                                   |
+# |-----------|------------------------------------------------   |-------------------------------------------------------------------------------------------|
+# | Is Local  | local_w_code                                      | local_no_code = total_local_encounters - local_w_code                                      |
+# | Not Local | nonlocal_w_code = encounter_w_code - local_w_code | nonlocal_no_code = total_encounters - encounter_w_code - total_local_encounters + local_w_code |
+filter(fact_table, CODE == "59408-5")
+filter(dat$observations.csv, CODE == "59408-5") %>% with(browser())
+
+
+
+# Validating total encounters between dataframes
+n_distinct(fact_table$ENCOUNTER) # number of encounters from fact_table
+n_distinct(dat$encounters.csv$Id) # number of encounters from encounters.csv where Id is ENCOUNTER
+discrepant_encounters <- setdiff(fact_table$ENCOUNTER,c(dat$encounters.csv$Id,""))
+
+#plot(conditionslope$events, type="l") #plot the ranked slopes to visually spot cutoff/elbow
+#abline(v=25,col="blue") #25 reasonable cutoff
+
+
