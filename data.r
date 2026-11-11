@@ -567,37 +567,9 @@ table(allergy_test$subtype)
 fact_table <- sapply(dat, fn_standardize, simplify = FALSE) %>%
   bind_rows(.id = "type")
 
-#Group records by code and description
-#overall and within the systemic and local encounter lists, remove grouping after calc.
-#Add total number of encounters for comparsion 
-encounter_code_tallies_2 <- fact_table %>%
-  group_by(CODE, DESCRIPTION, type) %>%
-  summarise(encounter_w_code = n_distinct(ENCOUNTER),
-            systemic_w_code = sum(unique(ENCOUNTER) %in% systemicencounters),
-            local_w_code = sum(unique(ENCOUNTER) %in% localencounters)
-  ) %>% 
-  mutate(total_encounters=nrow(dat$encounters.csv),
-         total_systemic_encounters = length(systemicencounters),
-         total_local_encounters = length(localencounters),
-         fraction_total_w_code= encounter_w_code/total_encounters,
-         fraction_systemic_w_code= systemic_w_code/total_systemic_encounters,
-         fraction_local_w_code= local_w_code/total_local_encounters,
-         local_no_code = total_local_encounters - local_w_code,
-         nonlocal_w_code = encounter_w_code - local_w_code,
-         nonlocal_no_code = total_encounters - encounter_w_code - total_local_encounters + local_w_code,
-         #Haldane corrections
-         haldane_local_w_code = local_w_code + 0.5,
-         haldane_local_no_code = local_no_code + 0.5,
-         haldane_nonlocal_w_code = nonlocal_w_code + 0.5,
-         haldane_nonlocal_no_code = nonlocal_no_code + 0.5,
-         #Proportions
-         local_code_prevalence= haldane_local_w_code/(haldane_local_w_code+haldane_local_no_code),
-         nonlocal_code_absence=  haldane_nonlocal_no_code/(haldane_nonlocal_w_code+haldane_nonlocal_no_code),
-         local_likelihood_ratio= local_code_prevalence/(1-nonlocal_code_absence),
-         local_OR= haldane_local_w_code*haldane_nonlocal_no_code/(haldane_local_no_code*haldane_nonlocal_w_code)
-         ) %>% arrange(desc(local_likelihood_ratio)
-         )
          
+# Tallies of patients and encounters by code ----
+# where patients has a df and encounters has a df
 
 # |           | Has Code                                          | No Code                                                                                   |
 # |-----------|------------------------------------------------   |-------------------------------------------------------------------------------------------|
@@ -616,4 +588,189 @@ discrepant_encounters <- setdiff(fact_table$ENCOUNTER,c(dat$encounters.csv$Id,""
 #plot(conditionslope$events, type="l") #plot the ranked slopes to visually spot cutoff/elbow
 #abline(v=25,col="blue") #25 reasonable cutoff
 
+
+
+#' Table: number of local and systemic encounters per code, with
+#' Haldane-corrected proportions, LR and OR for each.
+#+ new_encounter_code_tallies
+new_encounter_code_tallies <- fact_table %>%
+  group_by(CODE, DESCRIPTION, type, subtype) %>%
+  summarise(all_encounters_w_code = n_distinct(ENCOUNTER)
+            , local_encounters_w_code =
+              sum(unique(ENCOUNTER) %in% local_encounters)
+            , systemic_encounters_w_code =
+              sum(unique(ENCOUNTER) %in% systemic_encounters)
+            , .groups = "drop") %>%
+  mutate(total_all_encounters = nrow(dat$encounters.csv)
+         , total_local_encounters = length(local_encounters)
+         , total_systemic_encounters = length(systemic_encounters)
+         , fraction_all_encounters_w_code =
+           all_encounters_w_code/total_all_encounters
+         , fraction_local_encounters_w_code =
+           local_encounters_w_code/total_local_encounters
+         , fraction_systemic_encounters_w_code =
+           systemic_encounters_w_code/total_systemic_encounters
+         # Local 2x2 cells
+         , local_encounters_no_code =
+           total_local_encounters - local_encounters_w_code
+         , nonlocal_encounters_w_code =
+           all_encounters_w_code - local_encounters_w_code
+         , nonlocal_encounters_no_code = total_all_encounters -
+           all_encounters_w_code - total_local_encounters +
+           local_encounters_w_code
+         # Systemic 2x2 cells
+         , systemic_encounters_no_code =
+           total_systemic_encounters - systemic_encounters_w_code
+         , nonsystemic_encounters_w_code =
+           all_encounters_w_code - systemic_encounters_w_code
+         , nonsystemic_encounters_no_code = total_all_encounters -
+           all_encounters_w_code - total_systemic_encounters +
+           systemic_encounters_w_code
+         # Haldane corrections
+         , haldane_local_encounters_w_code =
+           local_encounters_w_code + 0.5
+         , haldane_local_encounters_no_code =
+           local_encounters_no_code + 0.5
+         , haldane_nonlocal_encounters_w_code =
+           nonlocal_encounters_w_code + 0.5
+         , haldane_nonlocal_encounters_no_code =
+           nonlocal_encounters_no_code + 0.5
+         , haldane_systemic_encounters_w_code =
+           systemic_encounters_w_code + 0.5
+         , haldane_systemic_encounters_no_code =
+           systemic_encounters_no_code + 0.5
+         , haldane_nonsystemic_encounters_w_code =
+           nonsystemic_encounters_w_code + 0.5
+         , haldane_nonsystemic_encounters_no_code =
+           nonsystemic_encounters_no_code + 0.5
+         # Proportions, LR and OR: local
+         , local_code_prevalence = haldane_local_encounters_w_code /
+           (haldane_local_encounters_w_code +
+              haldane_local_encounters_no_code)
+         , nonlocal_code_absence = haldane_nonlocal_encounters_no_code /
+           (haldane_nonlocal_encounters_w_code +
+              haldane_nonlocal_encounters_no_code)
+         , local_likelihood_ratio = local_code_prevalence /
+           (1 - nonlocal_code_absence)
+         , local_OR = haldane_local_encounters_w_code *
+           haldane_nonlocal_encounters_no_code /
+           (haldane_local_encounters_no_code *
+              haldane_nonlocal_encounters_w_code)
+         # Proportions, LR and OR: systemic
+         , systemic_code_prevalence = haldane_systemic_encounters_w_code /
+           (haldane_systemic_encounters_w_code +
+              haldane_systemic_encounters_no_code)
+         , nonsystemic_code_absence =
+           haldane_nonsystemic_encounters_no_code /
+           (haldane_nonsystemic_encounters_w_code +
+              haldane_nonsystemic_encounters_no_code)
+         , systemic_likelihood_ratio = systemic_code_prevalence /
+           (1 - nonsystemic_code_absence)
+         , systemic_OR = haldane_systemic_encounters_w_code *
+           haldane_nonsystemic_encounters_no_code /
+           (haldane_systemic_encounters_no_code *
+              haldane_nonsystemic_encounters_w_code)) %>%
+  arrange(desc(local_likelihood_ratio))
+
+#' Table: non-systemic codes seen in more than 100 systemic encounters.
+#+ new_encounter_filter
+filter(new_encounter_code_tallies
+       , !DESCRIPTION %in% systemic_conditions &
+         systemic_encounters_w_code > 100) %>%
+  select(CODE, DESCRIPTION, type, subtype, all_encounters_w_code
+         , systemic_encounters_w_code, systemic_likelihood_ratio
+         , systemic_OR) #%>% View()
+
+#' Table: number of local and systemic patients per code, with
+#' Haldane-corrected proportions, LR and OR for each.
+#+ new_patient_code_tallies
+new_patient_code_tallies <- fact_table %>%
+  group_by(CODE, DESCRIPTION, type, subtype) %>%
+  summarise(all_patients_w_code = n_distinct(PATIENT)
+            , local_patients_w_code =
+              sum(unique(PATIENT) %in% local_patients)
+            , systemic_patients_w_code =
+              sum(unique(PATIENT) %in% systemic_patients)
+            , .groups = "drop") %>%
+  mutate(total_all_patients = nrow(dat$patients.csv)
+         , total_local_patients = length(local_patients)
+         , total_systemic_patients = length(systemic_patients)
+         , fraction_all_patients_w_code =
+           all_patients_w_code/total_all_patients
+         , fraction_local_patients_w_code =
+           local_patients_w_code/total_local_patients
+         , fraction_systemic_patients_w_code =
+           systemic_patients_w_code/total_systemic_patients
+         # Local 2x2 cells
+         , local_patients_no_code =
+           total_local_patients - local_patients_w_code
+         , nonlocal_patients_w_code =
+           all_patients_w_code - local_patients_w_code
+         , nonlocal_patients_no_code = total_all_patients -
+           all_patients_w_code - total_local_patients +
+           local_patients_w_code
+         # Systemic 2x2 cells
+         , systemic_patients_no_code =
+           total_systemic_patients - systemic_patients_w_code
+         , nonsystemic_patients_w_code =
+           all_patients_w_code - systemic_patients_w_code
+         , nonsystemic_patients_no_code = total_all_patients -
+           all_patients_w_code - total_systemic_patients +
+           systemic_patients_w_code
+         # Haldane corrections
+         , haldane_local_patients_w_code =
+           local_patients_w_code + 0.5
+         , haldane_local_patients_no_code =
+           local_patients_no_code + 0.5
+         , haldane_nonlocal_patients_w_code =
+           nonlocal_patients_w_code + 0.5
+         , haldane_nonlocal_patients_no_code =
+           nonlocal_patients_no_code + 0.5
+         , haldane_systemic_patients_w_code =
+           systemic_patients_w_code + 0.5
+         , haldane_systemic_patients_no_code =
+           systemic_patients_no_code + 0.5
+         , haldane_nonsystemic_patients_w_code =
+           nonsystemic_patients_w_code + 0.5
+         , haldane_nonsystemic_patients_no_code =
+           nonsystemic_patients_no_code + 0.5
+         # Proportions, LR and OR: local
+         , local_code_prevalence = haldane_local_patients_w_code /
+           (haldane_local_patients_w_code +
+              haldane_local_patients_no_code)
+         , nonlocal_code_absence = haldane_nonlocal_patients_no_code /
+           (haldane_nonlocal_patients_w_code +
+              haldane_nonlocal_patients_no_code)
+         , local_likelihood_ratio = local_code_prevalence /
+           (1 - nonlocal_code_absence)
+         , local_OR = haldane_local_patients_w_code *
+           haldane_nonlocal_patients_no_code /
+           (haldane_local_patients_no_code *
+              haldane_nonlocal_patients_w_code)
+         # Proportions, LR and OR: systemic
+         , systemic_code_prevalence = haldane_systemic_patients_w_code /
+           (haldane_systemic_patients_w_code +
+              haldane_systemic_patients_no_code)
+         , nonsystemic_code_absence =
+           haldane_nonsystemic_patients_no_code /
+           (haldane_nonsystemic_patients_w_code +
+              haldane_nonsystemic_patients_no_code)
+         , systemic_likelihood_ratio = systemic_code_prevalence /
+           (1 - nonsystemic_code_absence)
+         , systemic_OR = haldane_systemic_patients_w_code *
+           haldane_nonsystemic_patients_no_code /
+           (haldane_systemic_patients_no_code *
+              haldane_nonsystemic_patients_w_code)) %>%
+  arrange(desc(local_likelihood_ratio));
+
+# Look at the extremes of likelihood for patients with a local encounter
+filter(new_patient_code_tallies
+       , all_patients_w_code > 100 &
+         !between(log(local_likelihood_ratio), -0.75, 2)) %>%
+  select(local_likelihood_ratio, all_patients_w_code
+         , local_patients_w_code) #%>% View()
+
+filter(new_patient_code_tallies, all_patients_w_code > 100) %>%
+  pull(local_likelihood_ratio) %>% log() %>%
+  hist(xlim = c(-2,8), breaks=100)
 
